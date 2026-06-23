@@ -193,9 +193,69 @@ ll gera_privada(ll q) {
     ll privada;
     ll limite = q - 1;
     mpz_urandomm(privada.get_mpz_t(), gerador, limite.get_mpz_t());
-    privada += 1;
+    privada += 1; // [1, q]
     return privada;
 }
+
+
+ll chave_valida(const string& nome, ll q) {
+    ll chave;
+    while (true) {
+        cout << "Chave privada de " << nome << " [1, " << (q-1) << "]: ";
+        cin >> chave;
+
+        if (chave >= 1 && chave < q) {
+            return chave; // válida, retorna
+        }
+        cout << "  Invalida! Deve estar entre 1 e " << (q-1) << ".\n";
+    }
+}
+
+
+
+void diffie_hellman() {
+    cout << "\n=== Diffie-Hellman sobre o toro T2 ===\n\n";
+
+    int bits_p, bits_q;
+    cout << "Bits de p: ";
+    cin >> bits_p;
+    cout << "Bits de q: ";
+    cin >> bits_q;
+
+    auto [p, q] = gera_parametros(bits_p, bits_q);
+    Elemento g = acha_gerador(p, q);
+    cout << "\nParametros gerados:\n";
+    cout << "p = " << p << "\n";
+    cout << "q = " << q << "\n";
+    cout << "g = (" << g.a << ", " << g.b << ")\n\n";
+
+    // escolher as chaves
+    char escolher;
+    cout << "Escolher chaves privadas manualmente? (s/n): ";
+    cin >> escolher;
+
+    ll a_priv, b_priv;
+    if (escolher == 's') {
+        a_priv = chave_valida("Alice", q);
+        b_priv = chave_valida("Bob", q);
+    } else {
+        a_priv = gera_privada(q);
+        b_priv = gera_privada(q);
+        cout << "Chave privada de Alice: " << a_priv << endl;
+        cout << "Chave privada de Bob: " << b_priv << endl;
+    }
+
+    Elemento a_pub = power(g, a_priv, p);
+    Elemento b_pub = power(g, b_priv, p);
+    Elemento seg_alice = power(b_pub, a_priv, p);
+    Elemento seg_bob   = power(a_pub, b_priv, p);
+
+    bool igual = (seg_alice.a == seg_bob.a && seg_alice.b == seg_bob.b);
+    cout << "\nSegredos batem? " << (igual ? "SIM" : "NAO") << "\n";
+    cout << "Segredo de Alice: " << seg_alice.a << " " << seg_alice.b << endl;
+    cout << "Segredo de Bob: " << seg_bob.a << " " << seg_bob.b << endl;
+}
+
 
 
 int main() {
@@ -206,6 +266,9 @@ int main() {
 
     int operacao = 1;
     do {
+        cout << "\n==========================\n";
+        cout << " Criptografia - Toro T2\n";
+        cout << "==========================\n";
         cout << "Escolha:\n";
         cout << "0: Sair\n";
         cout << "1: Diffie Helman\n";
@@ -213,11 +276,13 @@ int main() {
         cin >> operacao;
     
         if (operacao == 1) {
-            cout << "em desenvolvimento..." ;
+            diffie_hellman();
         } else if (operacao == 2) {
             cout << "em desenvolvimento...";
         }
-        cout << endl << "só o 0 funciona kakakakkakak";
+        else{
+            cout << "Opção Invalida";
+        }
     } while (operacao);
 
 }
