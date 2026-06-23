@@ -132,6 +132,70 @@ bool miller_rabin(ll n, ll rodadas){
 }
 
 
+/**
+ * Gerador de primos com quant de bits parametrizável
+ */
+ll gera_primo(int bits){
+    ll candidato;
+    while(true){
+        mpz_urandomb(candidato.get_mpz_t(), gerador, bits);
+        mpz_setbit(candidato.get_mpz_t(), bits - 1); // garantir bit mais relevante 1
+        mpz_setbit(candidato.get_mpz_t(), 0); //garantir numero impar
+
+        if(miller_rabin(candidato, 40)) return candidato;
+    }
+}
+
+
+/**
+ * Gera os paramtros p e q, recebendo o numero de bits de ambos respectivamente
+ */
+pair<ll, ll> gera_parametros(int bits_p, int bits_q) {
+
+    if (bits_p <= bits_q + 2) {
+        cerr << "Erro: bits_p deve ser maior que bits_q + 2\n";
+        exit(1);
+    }
+
+    ll q = gera_primo(bits_q);
+
+
+    int bits_m = bits_p - bits_q - 2;
+    ll m, p;
+    while (true) {
+        mpz_urandomb(m.get_mpz_t(), gerador, bits_m);
+        mpz_setbit(m.get_mpz_t(), bits_m - 1);   // garantir o tamanho do m
+
+        p = 4 * m * q - 1; // p = 3 mod 4
+        if(miller_rabin(p, 40)) break;
+    }
+
+    return {p, q};
+}
+
+
+// qualquer gerador é igualmente bom, basta achar um, o q garante isso
+Elemento acha_gerador(ll p, ll q) {
+    ll expo = (p * p - 1) / q;
+    while (true) {
+        Elemento z;
+        mpz_urandomm(z.a.get_mpz_t(), gerador, p.get_mpz_t());
+        mpz_urandomm(z.b.get_mpz_t(), gerador, p.get_mpz_t());
+
+        Elemento g = power(z, expo, p);
+
+        if (!(g.a == 1 && g.b == 0)) return g;
+    }
+}
+
+
+ll gera_privada(ll q) {
+    ll privada;
+    ll limite = q - 1;
+    mpz_urandomm(privada.get_mpz_t(), gerador, limite.get_mpz_t());
+    privada += 1;
+    return privada;
+}
 
 
 int main() {
