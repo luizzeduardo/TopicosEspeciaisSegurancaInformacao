@@ -138,8 +138,8 @@ bool miller_rabin(ll n, ll rodadas){
 ll gera_primo(int bits){
     ll candidato;
     while(true){
-        mpz_urandomb(candidato.get_mpz_t(), gerador, bits);
-        mpz_setbit(candidato.get_mpz_t(), bits - 1); // garantir bit mais relevante 1
+        mpz_urandomb(candidato.get_mpz_t(), gerador, (mp_bitcnt_t) bits);
+        mpz_setbit(candidato.get_mpz_t(), (mp_bitcnt_t) (bits - 1)); // garantir bit mais relevante 1
         mpz_setbit(candidato.get_mpz_t(), 0); //garantir numero impar
 
         if(miller_rabin(candidato, 40)) return candidato;
@@ -163,8 +163,8 @@ pair<ll, ll> gera_parametros(int bits_p, int bits_q) {
     int bits_m = bits_p - bits_q - 2;
     ll m, p;
     while (true) {
-        mpz_urandomb(m.get_mpz_t(), gerador, bits_m);
-        mpz_setbit(m.get_mpz_t(), bits_m - 1);   // garantir o tamanho do m
+        mpz_urandomb(m.get_mpz_t(), gerador, (mp_bitcnt_t)bits_m);
+        mpz_setbit(m.get_mpz_t(), (mp_bitcnt_t)(bits_m - 1));   // garantir o tamanho do m
 
         p = 4 * m * q - 1; // p = 3 mod 4
         if(miller_rabin(p, 40)) break;
@@ -193,7 +193,7 @@ ll gera_privada(ll q) {
     ll privada;
     ll limite = q - 1;
     mpz_urandomm(privada.get_mpz_t(), gerador, limite.get_mpz_t());
-    privada += 1; // [1, q]
+    privada += 1; // [1, q)
     return privada;
 }
 
@@ -209,6 +209,23 @@ ll chave_valida(const string& nome, ll q) {
         }
         cout << "  Invalida! Deve estar entre 1 e " << (q-1) << ".\n";
     }
+}
+
+
+
+pair<Elemento, Elemento> elgamal_cifra(Elemento M, Elemento H, Elemento g, ll p, ll q) {
+    ll k = gera_privada(q); // nonce aleatorio
+    Elemento c1 = power(g, k, p);
+    Elemento mascara = power(H, k, p);
+    Elemento c2 = mul(M, mascara, p);
+    return {c1, c2};
+}
+
+Elemento elgamal_decifra(Elemento c1, Elemento c2, ll d, ll p) {
+    Elemento mascara = power(c1, d, p);
+    Elemento inversa = inv_mod(mascara, p);
+    Elemento m =mul(c2, inversa, p);
+    return m;
 }
 
 
@@ -258,11 +275,41 @@ void diffie_hellman() {
 
 
 
+void elgamal() {
+    cout << "\n=== ElGamal sobre o toro T2 ===\n\n";
+
+    int bits_p, bits_q;
+    cout << "Bits de p: ";
+    cin >> bits_p;
+    cout << "Bits de q: ";
+    cin >> bits_q;
+
+    auto [p, q] = gera_parametros(bits_p, bits_q);
+    Elemento g = acha_gerador(p, q);
+
+    // Alice gera chaves
+    ll d = gera_privada(q);          // privada
+    Elemento H = power(g, d, p);     // pública
+
+    // mensagem de teste: uma potência de g (garante que está no grupo)
+    Elemento M = power(g, 42, p);
+
+    cout << "\nMensagem original: (" << M.a << ", " << M.b << ")\n";
+
+    auto [c1, c2] = elgamal_cifra(M, H, g, p, q);
+    Elemento M_dec = elgamal_decifra(c1, c2, d, p);
+
+    cout << "Mensagem decifrada: (" << M_dec.a << ", " << M_dec.b << ")\n";
+
+    bool ok = (M.a == M_dec.a && M.b == M_dec.b);
+    cout << "Recuperada? " << (ok ? "SIM" : "NAO") << "\n";
+}
+
+
 int main() {
 
     gmp_randinit_default(gerador); // instancia o gerador 'aleatorio'
-    gmp_randseed_ui(gerador, time(nullptr));
-
+    gmp_randseed_ui(gerador, (unsigned long)time(nullptr));
 
     int operacao = 1;
     do {
@@ -278,7 +325,7 @@ int main() {
         if (operacao == 1) {
             diffie_hellman();
         } else if (operacao == 2) {
-            cout << "em desenvolvimento...";
+            elgamal();
         }
         else{
             cout << "Opção Invalida";
