@@ -278,7 +278,7 @@ bool blocos_iguais(const vector<Elemento>& x, const vector<Elemento>& y) {
 
 // Criterio de avalanche: altera 1 bit do bloco de entrada e mede a fracao
 // de bits do bloco cifrado que mudam. Ideal 50%.
-double teste_avalanche(ll p, int trials) {
+double avalanche(ll p, int tentativas) {
     size_t nbits = mpz_sizeinbase(p.get_mpz_t(), 2);
     long total_bits = 8L * (long)nbits;   // 8 componentes de nbits bits
 
@@ -287,7 +287,7 @@ double teste_avalanche(ll p, int trials) {
     auto chaves = key_schedule(chave, p);
 
     double soma = 0.0;
-    for (int t = 0; t < trials; t++) {
+    for (int t = 0; t < tentativas; t++) {
         vector<Elemento> M(4);             // bloco aleatorio
         for (auto& e : M) {
             mpz_urandomm(e.a.get_mpz_t(), sorteador, p.get_mpz_t());
@@ -309,87 +309,141 @@ double teste_avalanche(ll p, int trials) {
         }
         soma += (double)dif / total_bits;
     }
-    return 100.0 * soma / trials;
+    return 100.0 * soma / tentativas;
+}
+
+
+// Teste de homogeneidade: decifra com chave errada e verifica se o resultado
+// e um multiplo escalar da mensagem (D2[i] = lambda*M[i] com o MESMO lambda).
+// Retorna quantas vezes a propriedade ocorreu (esperado 0, apos o passo afim).
+int homogeneidade(ll p, int tentativas) {
+    size_t nbits = mpz_sizeinbase(p.get_mpz_t(), 2);
+    int ocorrencias = 0;
+    for (int t = 0; t < tentativas; t++) {
+        ll kc, kw;                         // duas chaves distintas
+        mpz_urandomb(kc.get_mpz_t(), sorteador, (mp_bitcnt_t)nbits);
+        mpz_urandomb(kw.get_mpz_t(), sorteador, (mp_bitcnt_t)nbits);
+        auto Kc = key_schedule(kc, p);
+        auto Kw = key_schedule(kw, p);
+
+        vector<Elemento> M(4);             // bloco aleatorio
+        for (auto& e : M) {
+            mpz_urandomm(e.a.get_mpz_t(), sorteador, p.get_mpz_t());
+            mpz_urandomm(e.b.get_mpz_t(), sorteador, p.get_mpz_t());
+        }
+
+        auto C  = cifrar(M, Kc, p);
+        auto D2 = decifrar(C, Kw, p);
+
+        // lambda_i = D2[i] * M[i]^-1 ; se todos iguais, e multiplo escalar
+        Elemento lam0 = mul(D2[0], inverso(M[0], p), p);
+        bool escalar = true;
+        for (int i = 1; i < 4; i++) {
+            Elemento lami = mul(D2[i], inverso(M[i], p), p);
+            if (!(lami.a == lam0.a && lami.b == lam0.b)) { escalar = false; break; }
+        }
+        if (escalar) ocorrencias++;
+    }
+    return ocorrencias;
 }
 
 
 
+// =============================================
+//            Funções dos testes
+// =============================================
 
 
-int main() {
-    gmp_randinit_default(sorteador);
-    gmp_randinit_default(sorteador_chave);
-    gmp_randseed_ui(sorteador, (unsigned long)time(nullptr));
-
-    cout << "=== Cifra Simetrica SPN sobre F_{p^2} ===\n\n";
-    int bits_p;
+ll configurar_primo() {
+    int bits;
     cout << "Bits do primo p (ex: 256): ";
-    cin >> bits_p;
-
-    ll p = gera_primo_3mod4(bits_p);
-    init_cifra(p);                       // fixa ALPHA e pre-computa ALPHA_INV
+    cin >> bits;
+    ll p = gera_primo_3mod4(bits);
     cout << "\np = " << p << "\n(p mod 4 = " << mod(p, 4) << ")\n\n";
+    return p;
+}
 
 
-    // chave e key schedule
+ll gerar_chave_aleatoria(int bits) {
     ll chave;
-    mpz_urandomb(chave.get_mpz_t(), sorteador, (mp_bitcnt_t)bits_p);
+    mpz_urandomb(chave.get_mpz_t(), sorteador, (mp_bitcnt_t)bits);
+    return chave;
+}
+
+// parametrizar dps
+void teste_texto_conhecido(ll p) {
+    size_t nbits = mpz_sizeinbase(p.get_mpz_t(), 2);
+    ll chave = gerar_chave_aleatoria(nbits);
     auto chaves = key_schedule(chave, p);
     cout << "Chave K = " << chave << "\n";
-    cout << "Subchaves geradas: " << chaves.size() << " (uma por rodada)\n\n";
+    cout << "Subchaves geradas: " << chaves.size() << "\n\n";
 
-
-    // mensagem -> bloco
-    string texto = "Cifra SPN autoral sobre o toro T2";
+    string texto = "Cifra SPN sobre o toro T2";
     cout << "--- Mensagem ---\nTexto: \"" << texto << "\"\n";
     auto M = texto_para_bloco(texto, p);
     imprime_bloco("Bloco original", M);
 
-
-    // cifracao
-    cout << "\n--- Cifracao ---\n";
+    // Cifração
     auto C = cifrar(M, chaves, p);
+    cout << "\n--- Cifracao ---\n";
     imprime_bloco("Bloco cifrado", C);
 
-
-    // decifracao com a chave correta
-    cout << "\n--- Decifracao (chave correta) ---\n";
+    // Decifração correta
     auto D = decifrar(C, chaves, p);
+    cout << "\n--- Decifracao (chave correta) ---\n";
     imprime_bloco("Bloco recuperado", D);
     cout << "Texto recuperado: \"" << bloco_para_texto(D, texto.size(), p) << "\"\n";
     cout << "Recuperou? " << (blocos_iguais(M, D) ? "SIM" : "NAO") << "\n";
 
-
-    // decifracao com chave errada (mostra a dependencia da chave)
+    // Decifração com chave errada
     cout << "\n--- Decifracao (chave ERRADA) ---\n";
-    ll chave_errada;
-    mpz_urandomb(chave_errada.get_mpz_t(), sorteador, (mp_bitcnt_t)bits_p);
+    ll chave_errada = gerar_chave_aleatoria(nbits);
     cout << "Chave K' = " << chave_errada << "\n";
     auto D2 = decifrar(C, key_schedule(chave_errada, p), p);
     imprime_bloco("Bloco recuperado", D2);
     string lixo = bloco_para_texto(D2, texto.size(), p);
-    for (char& ch : lixo) if ((unsigned char)ch < 32 || (unsigned char)ch > 126) ch = '.';
+    for (char& ch : lixo)
+        if ((unsigned char)ch < 32 || (unsigned char)ch > 126) ch = '.';
     cout << "Texto recuperado: \"" << lixo << "\"\n";
     cout << "Recuperou? " << (blocos_iguais(M, D2) ? "SIM" : "NAO") << "\n";
+}
 
 
-    // verificacao em massa
-    cout << "\n--- Verificacao (blocos aleatorios) ---\n";
-    int N_test = 1000, ok = 0;
+void verificar_blocos_aleatorios(ll p, int N_test) {
+    size_t nbits = mpz_sizeinbase(p.get_mpz_t(), 2);
+    ll chave = gerar_chave_aleatoria(nbits);
+    auto chaves = key_schedule(chave, p);
+
+    int ok = 0;
     for (int t = 0; t < N_test; t++) {
         vector<Elemento> R(4);
         for (auto& e : R) {
             mpz_urandomm(e.a.get_mpz_t(), sorteador, p.get_mpz_t());
             mpz_urandomm(e.b.get_mpz_t(), sorteador, p.get_mpz_t());
         }
-        if (blocos_iguais(R, decifrar(cifrar(R, chaves, p), chaves, p))) ok++;
+        if (blocos_iguais(R, decifrar(cifrar(R, chaves, p), chaves, p)))
+            ok++;
     }
-    cout << ok << "/" << N_test << " round-trips corretos\n";
+    cout << "\n--- Verificacao (blocos aleatorios) ---\n";
+    cout << ok << "/" << N_test << " testes corretos\n";
+}
 
 
-    // desempenho
-    cout << "\n--- Desempenho (p = " << bits_p << " bits, bloco = " << 8*bits_p << " bits) ---\n";
-    int N = bits_p <= 128 ? 3000 : (bits_p <= 256 ? 1000 : 300);
+void medir_desempenho(ll p) {
+    size_t nbits = mpz_sizeinbase(p.get_mpz_t(), 2);
+    ll chave = gerar_chave_aleatoria(nbits);
+    auto chaves = key_schedule(chave, p);
+    vector<Elemento> M(4);   // bloco de amostra
+    for (auto& e : M) {
+        mpz_urandomm(e.a.get_mpz_t(), sorteador, p.get_mpz_t());
+        mpz_urandomm(e.b.get_mpz_t(), sorteador, p.get_mpz_t());
+    }
+    auto C = cifrar(M, chaves, p);
+
+    int N = nbits <= 128 ? 3000 : (nbits <= 256 ? 1000 : 300);
+    cout << "\n--- Desempenho (p = " << nbits << " bits, bloco = "
+         << 8 * nbits << " bits) ---\n";
+
     auto t0 = chrono::high_resolution_clock::now();
     for (int i = 0; i < N; i++) { volatile auto x = cifrar(M, chaves, p); (void)x; }
     auto t1 = chrono::high_resolution_clock::now();
@@ -400,13 +454,50 @@ int main() {
     cout << fixed << setprecision(2);
     cout << "Cifracao  : " << us_cif << " us/bloco\n";
     cout << "Decifracao: " << us_dec << " us/bloco\n";
+}
 
 
-    //teste de avalanche
+void teste_avalanche(ll p, int tentativas) {
     cout << "\n--- Avalanche ---\n";
-    int testes_avalanche = 200;
-    cout << "Avalanche (1 bit flip, " << testes_avalanche << " tentativas): " << teste_avalanche(p, testes_avalanche) << "%\n";
+    double percent = avalanche(p, tentativas);
+    cout << "Avalanche (1 bit flip, " << tentativas << " tentativas): "
+         << percent << "%\n";
+}
 
+
+void teste_homogeneidade(ll p, int tentativas) {
+    cout << "\n--- Homogeneidade ---\n";
+    int ocorr = homogeneidade(p, tentativas);
+    cout << "Ocorrencias de homogeneidade em " << tentativas
+         << " tentativas: " << ocorr << "\n";
+}
+
+
+int main() {
+    gmp_randinit_default(sorteador);
+    gmp_randinit_default(sorteador_chave);
+    gmp_randseed_ui(sorteador, (unsigned long)time(nullptr));
+
+    cout << "=== Cifra Simetrica SPN sobre F_{p^2} ===\n\n";
+
+    // Configuração do primo e da cifra
+    ll p = configurar_primo();
+    init_cifra(p);
+
+    // Teste funcional com texto conhecido
+    teste_texto_conhecido(p);
+
+    // Verificação de ida‑e‑volta com blocos aleatórios
+    verificar_blocos_aleatorios(p, 1000);
+
+    // Medição de desempenho
+    medir_desempenho(p);
+
+    // Teste de avalanche
+    teste_avalanche(p, 200);
+
+    // teste de homogeneidade
+    teste_homogeneidade(p, 100);
 
     return 0;
 }
