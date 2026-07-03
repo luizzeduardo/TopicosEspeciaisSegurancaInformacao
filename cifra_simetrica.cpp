@@ -65,13 +65,13 @@ Elemento conjugado(Elemento z, ll p) {
 //=======================================================
 // S-box afim (inversao + conjugacao + mapa afim alpha*(.)+delta)
 //=======================================================
-// ALPHA e uma constante PUBLICA fixa (papel algebrico, como a matriz afim do AES)
-// o segredo mora em k_theta, c e no delta aditivo (rk). ALPHA_INV
+// ALPHA e uma constante PUBLICA fixa (papel algebrico, como a matriz afim
+// do AES); o segredo mora em k_theta, c e no delta aditivo (rk). ALPHA_INV
 // e pre-computado uma unica vez em init_cifra().
 Elemento ALPHA, ALPHA_INV;
 
 void init_cifra(ll p) {
-    // digitos de pi e de num de e reduzidos mod p
+    // "nothing-up-my-sleeve": digitos de pi e de e reduzidos mod p
     ALPHA = Elemento(mod(mpz_class("314159265358979"), p),
                      mod(mpz_class("271828182845905"), p));
     if (norma(ALPHA, p) == 0) ALPHA = Elemento(1, 0);  // garante invertibilidade
@@ -84,7 +84,7 @@ void init_cifra(ll p) {
 Elemento sbox(Elemento z, Elemento k_theta, ll c, Elemento delta, ll p) {
     Elemento t = dilatacao(rotacao(z, k_theta, p), c, p);  // z * k_theta * c
     Elemento u = inverso(t, p);                            // inversao de corpo
-    Elemento v = conjugado(u, p);                          // conjugacao
+    Elemento v = conjugado(u, p);                          // conjugacao (Frobenius)
     return soma(mul(ALPHA, v, p), delta, p);               // alpha*v + delta
 }
 
@@ -221,11 +221,13 @@ vector<Elemento> decifrar(vector<Elemento> bloco, vector<SubChave> chaves, ll p)
 
 // ---------- auxiliares ----------
 
+
 void imprime_bloco(const string& rotulo, const vector<Elemento>& b) {
     cout << rotulo << ":\n";
     for (int i = 0; i < 4; i++)
         cout << "  m" << i << " = (" << b[i].a << ", " << b[i].b << ")\n";
 }
+
 
 // empacota uma string em 4 elementos de F_{p^2} (8 componentes < p)
 vector<Elemento> texto_para_bloco(const string& s, ll p) {
@@ -243,6 +245,7 @@ vector<Elemento> texto_para_bloco(const string& s, ll p) {
     }
     return bloco;
 }
+
 
 string bloco_para_texto(const vector<Elemento>& b, size_t len, ll p) {
     size_t nbits = mpz_sizeinbase(p.get_mpz_t(), 2);
@@ -265,11 +268,53 @@ string bloco_para_texto(const vector<Elemento>& b, size_t len, ll p) {
     return out;
 }
 
+
 bool blocos_iguais(const vector<Elemento>& x, const vector<Elemento>& y) {
     for (int i = 0; i < 4; i++)
         if (!(x[i].a == y[i].a && x[i].b == y[i].b)) return false;
     return true;
 }
+
+
+// Criterio de avalanche: altera 1 bit do bloco de entrada e mede a fracao
+// de bits do bloco cifrado que mudam. Ideal 50%.
+double teste_avalanche(ll p, int trials) {
+    size_t nbits = mpz_sizeinbase(p.get_mpz_t(), 2);
+    long total_bits = 8L * (long)nbits;   // 8 componentes de nbits bits
+
+    ll chave;                              // uma chave fixa para todo o teste
+    mpz_urandomb(chave.get_mpz_t(), sorteador, (mp_bitcnt_t)nbits);
+    auto chaves = key_schedule(chave, p);
+
+    double soma = 0.0;
+    for (int t = 0; t < trials; t++) {
+        vector<Elemento> M(4);             // bloco aleatorio
+        for (auto& e : M) {
+            mpz_urandomm(e.a.get_mpz_t(), sorteador, p.get_mpz_t());
+            mpz_urandomm(e.b.get_mpz_t(), sorteador, p.get_mpz_t());
+        }
+        auto C = cifrar(M, chaves, p);
+
+        vector<Elemento> M2 = M;           // vira 1 bit aleatorio do plaintext
+        int comp = rand() % 8;
+        int bit  = rand() % (int)nbits;
+        mpz_class* alvo = (comp % 2 == 0) ? &M2[comp/2].a : &M2[comp/2].b;
+        mpz_combit(alvo->get_mpz_t(), bit);
+        auto C2 = cifrar(M2, chaves, p);
+
+        long dif = 0; mpz_class x;         // conta bits diferentes
+        for (int i = 0; i < 4; i++) {
+            x = C[i].a ^ C2[i].a; dif += mpz_popcount(x.get_mpz_t());
+            x = C[i].b ^ C2[i].b; dif += mpz_popcount(x.get_mpz_t());
+        }
+        soma += (double)dif / total_bits;
+    }
+    return 100.0 * soma / trials;
+}
+
+
+
+
 
 int main() {
     gmp_randinit_default(sorteador);
@@ -285,6 +330,7 @@ int main() {
     init_cifra(p);                       // fixa ALPHA e pre-computa ALPHA_INV
     cout << "\np = " << p << "\n(p mod 4 = " << mod(p, 4) << ")\n\n";
 
+
     // chave e key schedule
     ll chave;
     mpz_urandomb(chave.get_mpz_t(), sorteador, (mp_bitcnt_t)bits_p);
@@ -292,16 +338,19 @@ int main() {
     cout << "Chave K = " << chave << "\n";
     cout << "Subchaves geradas: " << chaves.size() << " (uma por rodada)\n\n";
 
+
     // mensagem -> bloco
     string texto = "Cifra SPN autoral sobre o toro T2";
     cout << "--- Mensagem ---\nTexto: \"" << texto << "\"\n";
     auto M = texto_para_bloco(texto, p);
     imprime_bloco("Bloco original", M);
 
+
     // cifracao
     cout << "\n--- Cifracao ---\n";
     auto C = cifrar(M, chaves, p);
     imprime_bloco("Bloco cifrado", C);
+
 
     // decifracao com a chave correta
     cout << "\n--- Decifracao (chave correta) ---\n";
@@ -309,6 +358,7 @@ int main() {
     imprime_bloco("Bloco recuperado", D);
     cout << "Texto recuperado: \"" << bloco_para_texto(D, texto.size(), p) << "\"\n";
     cout << "Recuperou? " << (blocos_iguais(M, D) ? "SIM" : "NAO") << "\n";
+
 
     // decifracao com chave errada (mostra a dependencia da chave)
     cout << "\n--- Decifracao (chave ERRADA) ---\n";
@@ -321,6 +371,7 @@ int main() {
     for (char& ch : lixo) if ((unsigned char)ch < 32 || (unsigned char)ch > 126) ch = '.';
     cout << "Texto recuperado: \"" << lixo << "\"\n";
     cout << "Recuperou? " << (blocos_iguais(M, D2) ? "SIM" : "NAO") << "\n";
+
 
     // verificacao em massa
     cout << "\n--- Verificacao (blocos aleatorios) ---\n";
@@ -335,6 +386,7 @@ int main() {
     }
     cout << ok << "/" << N_test << " round-trips corretos\n";
 
+
     // desempenho
     cout << "\n--- Desempenho (p = " << bits_p << " bits, bloco = " << 8*bits_p << " bits) ---\n";
     int N = bits_p <= 128 ? 3000 : (bits_p <= 256 ? 1000 : 300);
@@ -348,5 +400,13 @@ int main() {
     cout << fixed << setprecision(2);
     cout << "Cifracao  : " << us_cif << " us/bloco\n";
     cout << "Decifracao: " << us_dec << " us/bloco\n";
+
+
+    //teste de avalanche
+    cout << "\n--- Avalanche ---\n";
+    int testes_avalanche = 200;
+    cout << "Avalanche (1 bit flip, " << testes_avalanche << " tentativas): " << teste_avalanche(p, testes_avalanche) << "%\n";
+
+
     return 0;
 }
