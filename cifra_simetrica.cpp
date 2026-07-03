@@ -8,13 +8,16 @@ gmp_randstate_t sorteador_chave;  // gerador do key schedule (semeado pela chave
 
 
 //=======================================================
-// Aritmética do corpo F_{p^2} (reusada da Parte I)
+// Aritmetica do corpo F_{p^2} (reusada da Parte I)
 //=======================================================
 
 
+// Cada subchave de rodada: rotacao (k_theta, norma 1), dilatacao (c) e
+// a chave aditiva rk (delta da S-box afim), um elemento por lane.
 struct SubChave {
     Elemento k_theta;
     ll c;
+    vector<Elemento> rk;
 };
 
 
@@ -38,7 +41,7 @@ Elemento rotacao_inversa(Elemento z, Elemento k_theta, ll p) {
 
 Elemento dilatacao_inversa(Elemento z, ll c, ll p) {
     ll c_inv = inv_mod_int(c, p);
-    return dilatacao(z, c_inv, p);  // reusa a dilatação com c_inv
+    return dilatacao(z, c_inv, p);  // reusa a dilatacao com c_inv
 }
 
 
@@ -52,9 +55,52 @@ Elemento inverso(Elemento z, ll p) {
 }
 
 
+// conjugado a + bi -> a - bi. Com p = 3 (mod 4) isto e o Frobenius (z^p)
+// e coincide com a inversao no toro T_2.
+Elemento conjugado(Elemento z, ll p) {
+    return Elemento(z.a, mod(-z.b, p));
+}
+
+
+//=======================================================
+// S-box afim (inversao + conjugacao + mapa afim alpha*(.)+delta)
+//=======================================================
+// ALPHA e uma constante PUBLICA fixa (papel algebrico, como a matriz afim do AES)
+// o segredo mora em k_theta, c e no delta aditivo (rk). ALPHA_INV
+// e pre-computado uma unica vez em init_cifra().
+Elemento ALPHA, ALPHA_INV;
+
+void init_cifra(ll p) {
+    // digitos de pi e de num de e reduzidos mod p
+    ALPHA = Elemento(mod(mpz_class("314159265358979"), p),
+                     mod(mpz_class("271828182845905"), p));
+    if (norma(ALPHA, p) == 0) ALPHA = Elemento(1, 0);  // garante invertibilidade
+    ALPHA_INV = inverso(ALPHA, p);
+}
+
+
+// S(z) = alpha * conj(z^-1) + delta, com a mistura multiplicativa da chave (k_theta, c)
+// aplicada antes da inversao.
+Elemento sbox(Elemento z, Elemento k_theta, ll c, Elemento delta, ll p) {
+    Elemento t = dilatacao(rotacao(z, k_theta, p), c, p);  // z * k_theta * c
+    Elemento u = inverso(t, p);                            // inversao de corpo
+    Elemento v = conjugado(u, p);                          // conjugacao
+    return soma(mul(ALPHA, v, p), delta, p);               // alpha*v + delta
+}
+
+// Inversa: (y-delta)*alpha^-1 -> conj -> inverso -> desfaz k_theta,c
+Elemento sbox_inversa(Elemento y, Elemento k_theta, ll c, Elemento delta, ll p) {
+    Elemento v = mul(sub(y, delta, p), ALPHA_INV, p);      // (y - delta)*alpha^-1
+    Elemento u = conjugado(v, p);                          // conj desfaz conj
+    Elemento t = inverso(u, p);                            // inversao desfaz inversao
+    Elemento z = dilatacao_inversa(t, c, p);               // * c^-1
+    return rotacao_inversa(z, k_theta, p);                 // * conj(k_theta)
+}
+
+
 Elemento f_mistura(Elemento z, ll p) {
     // multiplica por uma constante fixa pra embaralhar
-    Elemento constante(12345, 67890);  // valor arbitrário fixo
+    Elemento constante(12345, 67890);  // valor arbitrario fixo
     return mul(z, constante, p);
 }
 
@@ -89,13 +135,12 @@ vector<Elemento> difusao_tras_inversa(vector<Elemento> bloco, ll p) {
 }
 
 
-vector<Elemento> uma_rodada(vector<Elemento> bloco, Elemento k_theta, ll c, ll p, int r) {
+vector<Elemento> uma_rodada(vector<Elemento> bloco, const SubChave& sk, ll p, int r) {
+    // camada de substituicao: S-box afim por elemento
     for (int i = 0; i < 4; i++) {
-        bloco[i] = rotacao(bloco[i], k_theta, p);
-        bloco[i] = dilatacao(bloco[i], c, p);
-        bloco[i] = inverso(bloco[i], p);
+        bloco[i] = sbox(bloco[i], sk.k_theta, sk.c, sk.rk[i], p);
     }
-    // alterna a direção da difusão conforme a rodada
+    // camada de difusao: alterna a direcao conforme a rodada
     if (r % 2 == 0)
         bloco = difusao_frente(bloco, p);
     else
@@ -103,16 +148,15 @@ vector<Elemento> uma_rodada(vector<Elemento> bloco, Elemento k_theta, ll c, ll p
     return bloco;
 }
 
-vector<Elemento> uma_rodada_inversa(vector<Elemento> bloco, Elemento k_theta, ll c, ll p, int r) {
-    // desfaz a difusão da direção que foi usada nesta rodada
+vector<Elemento> uma_rodada_inversa(vector<Elemento> bloco, const SubChave& sk, ll p, int r) {
+    // desfaz a difusao da direcao usada nesta rodada
     if (r % 2 == 0)
         bloco = difusao_frente_inversa(bloco, p);
     else
         bloco = difusao_tras_inversa(bloco, p);
+    // desfaz a substituicao
     for (int i = 0; i < 4; i++) {
-        bloco[i] = inverso(bloco[i], p);
-        bloco[i] = dilatacao_inversa(bloco[i], c, p);
-        bloco[i] = rotacao_inversa(bloco[i], k_theta, p);
+        bloco[i] = sbox_inversa(bloco[i], sk.k_theta, sk.c, sk.rk[i], p);
     }
     return bloco;
 }
@@ -128,12 +172,12 @@ Elemento gera_norma1(Elemento w, ll p) {
 
 
 vector<SubChave> key_schedule(ll chave, ll p) {
-    // semeia o gerador do key schedule com a chave (DETERMINÍSTICO)
+    // semeia o gerador do key schedule com a chave (DETERMINISTICO)
     gmp_randseed(sorteador_chave, chave.get_mpz_t());
 
     vector<SubChave> chaves;
     for (int r = 0; r < NUM_RODADAS; r++) {
-        // gera um ponto w aleatório (do gerador semeado pela chave)
+        // gera um ponto w aleatorio (do gerador semeado pela chave)
         Elemento w;
         mpz_urandomm(w.a.get_mpz_t(), sorteador_chave, p.get_mpz_t());
         mpz_urandomm(w.b.get_mpz_t(), sorteador_chave, p.get_mpz_t());
@@ -146,7 +190,14 @@ vector<SubChave> key_schedule(ll chave, ll p) {
         mpz_urandomm(c.get_mpz_t(), sorteador_chave, p.get_mpz_t());
         if (c == 0) c = 1;   // garante c != 0
 
-        chaves.push_back({k_theta, c});
+        // rk: delta aditivo da S-box, um elemento por lane
+        vector<Elemento> rk(4);
+        for (int i = 0; i < 4; i++) {
+            mpz_urandomm(rk[i].a.get_mpz_t(), sorteador_chave, p.get_mpz_t());
+            mpz_urandomm(rk[i].b.get_mpz_t(), sorteador_chave, p.get_mpz_t());
+        }
+
+        chaves.push_back({k_theta, c, rk});
     }
     return chaves;
 }
@@ -154,7 +205,7 @@ vector<SubChave> key_schedule(ll chave, ll p) {
 
 vector<Elemento> cifrar(vector<Elemento> bloco, vector<SubChave> chaves, ll p) {
     for (int r = 0; r < NUM_RODADAS; r++) {
-        bloco = uma_rodada(bloco, chaves[r].k_theta, chaves[r].c, p, r);
+        bloco = uma_rodada(bloco, chaves[r], p, r);
     }
     return bloco;
 }
@@ -162,7 +213,7 @@ vector<Elemento> cifrar(vector<Elemento> bloco, vector<SubChave> chaves, ll p) {
 
 vector<Elemento> decifrar(vector<Elemento> bloco, vector<SubChave> chaves, ll p) {
     for (int r = NUM_RODADAS - 1; r >= 0; r--) {   // ordem reversa
-        bloco = uma_rodada_inversa(bloco, chaves[r].k_theta, chaves[r].c, p, r);
+        bloco = uma_rodada_inversa(bloco, chaves[r], p, r);
     }
     return bloco;
 }
@@ -202,7 +253,7 @@ string bloco_para_texto(const vector<Elemento>& b, size_t len, ll p) {
         const mpz_class& v = (comp % 2 == 0) ? b[comp/2].a : b[comp/2].b;
         size_t escritos = 0;
         if (v != 0) mpz_export(tmp.data(), &escritos, 1, 1, 1, 0, v.get_mpz_t());
-        if (escritos <= cap)                          // normal: alinha à direita
+        if (escritos <= cap)                          // normal: alinha a direita
             for (size_t j = 0; j < escritos; j++)
                 buf[comp*cap + (cap - escritos) + j] = tmp[j];
         else                                          // maior que o slot: usa os bytes baixos
@@ -231,6 +282,7 @@ int main() {
     cin >> bits_p;
 
     ll p = gera_primo_3mod4(bits_p);
+    init_cifra(p);                       // fixa ALPHA e pre-computa ALPHA_INV
     cout << "\np = " << p << "\n(p mod 4 = " << mod(p, 4) << ")\n\n";
 
     // chave e key schedule
