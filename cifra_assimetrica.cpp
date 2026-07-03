@@ -1,151 +1,9 @@
 #include <bits/stdc++.h>
 #include <gmpxx.h>
+#include "toro.hpp"
 using namespace std;
-using ll = mpz_class; //inteiro de precisão arbitraria
-gmp_randstate_t gerador; // gerador de nums 'aleatorios'
 
-
-//=======================================================================================
-//=-=-=-=-=-=-=-=-=-=-= Funções das Operações Modulares e Complexas -=-=-=-=-=-=-=-=-=-=-
-//=======================================================================================
  
-
-ll mod(ll x, ll p){
-    ll r = x % p;
-    if (r < 0){
-        r += p;
-    }
-    return r;
-}
-
-
-// usando exponenciação binaria
-ll power_int(ll base, ll exp, ll p){
-    ll resultado = 1;
-    base = mod(base, p);
-    while(exp>0){
-        if(exp%2==1){
-            resultado = mod(resultado*base, p);
-        }
-        base = mod(base*base, p);
-        exp/=2;
-    }
-    return resultado;
-}
-
-
-struct Elemento {
-    ll a;
-    ll b;
-
-    Elemento() : a(0), b(0) {} // valor padrão
-    Elemento(ll ai, ll bi) : a(ai), b(bi) {} // passagem de parametros
-};
-
-Elemento mul(Elemento x, Elemento y, ll p){
-    ll real = mod(x.a * y.a - x.b * y.b, p);
-    ll imag = mod(x.a * y.b + x.b * y.a, p);
-    return Elemento(real, imag);
-}
-
-
-// mesma coisa do power_int
-Elemento power(Elemento base, ll exp, ll p) {
-    Elemento resultado(1, 0); // neutro
-
-    while (exp > 0) {
-        if (exp%2 == 1) {
-            resultado = mul(resultado, base, p);
-        }
-
-        base = mul(base, base, p);
-        exp >>= 1;
-    }
-    return resultado;
-}
-
-
-Elemento inv_mod(Elemento x, ll p) {
-    return Elemento(x.a, mod(-x.b, p));
-}
-
-
-// (subgrupo do toro) se, e somente se, sua norma é 1.
-ll norma(Elemento x, ll p){
-    return mod(x.a*x.a + x.b*x.b, p);
-}
-
-
-/**
- * Algortimo Miller Rabin para verificar se o numero é primo ou não
- */
-bool miller_rabin(ll n, ll rodadas){
-    //casos triviais
-    if(n<2) return false;
-    if( n==2 || n==3) return true;
-    if(n%2==0) return false;
-
-    //fatorar n-1, no fator
-    ll d = n-1;
-    ll s = 0;
-    while(d%2==0){
-        d/=2;
-        s++;
-    }
-    // n-1 = 2^s . d
-
-
-    // testar rodadas testemunhas
-    for (int i = 0; i < rodadas; i++) {
-        ll a, x;
-
-        // sortear a em [2, n-2]
-        ll limite = n - 3;
-        mpz_urandomm(a.get_mpz_t(), gerador, limite.get_mpz_t());
-        a += 2;
-
-        // x = a^d mod n
-        x = power_int(a, d, n);
-
-        if(x==1 || x==n-1){
-            continue;
-        }
-
-        bool encontrou = false;
-
-        for (ll r = 1; r < s; r++) {
-            x = mod(x * x, n); 
-            if(x == n-1){
-                encontrou = true;
-                break;
-            }
-        }
-
-        if(!encontrou){
-            return false;
-        }
-
-    }
-
-    // passou em todas as testemunhas
-    return true;
-}
-
-
-/**
- * Gerador de primos com quant de bits parametrizável
- */
-ll gera_primo(int bits){
-    ll candidato;
-    while(true){
-        mpz_urandomb(candidato.get_mpz_t(), gerador, (mp_bitcnt_t) bits);
-        mpz_setbit(candidato.get_mpz_t(), (mp_bitcnt_t) (bits - 1)); // garantir bit mais relevante 1
-        mpz_setbit(candidato.get_mpz_t(), 0); //garantir numero impar
-
-        if(miller_rabin(candidato, 40)) return candidato;
-    }
-}
-
 
 /**
  * Gera os paramtros p e q, recebendo o numero de bits de ambos respectivamente
@@ -163,10 +21,10 @@ pair<ll, ll> gera_parametros(int bits_p, int bits_q) {
     int bits_m = bits_p - bits_q - 2;
     ll m, p;
     while (true) {
-        mpz_urandomb(m.get_mpz_t(), gerador, (mp_bitcnt_t)bits_m);
+        mpz_urandomb(m.get_mpz_t(), sorteador, (mp_bitcnt_t)bits_m);
         mpz_setbit(m.get_mpz_t(), (mp_bitcnt_t)(bits_m - 1));   // garantir o tamanho do m
 
-        p = 4 * m * q - 1; // p = 3 mod 4
+        p = 4 * m * q - 1; // p = 3 mod 4 e alem disso q|p
         if(miller_rabin(p, 40)) break;
     }
 
@@ -179,8 +37,8 @@ Elemento acha_gerador(ll p, ll q) {
     ll expo = (p * p - 1) / q;
     while (true) {
         Elemento z;
-        mpz_urandomm(z.a.get_mpz_t(), gerador, p.get_mpz_t());
-        mpz_urandomm(z.b.get_mpz_t(), gerador, p.get_mpz_t());
+        mpz_urandomm(z.a.get_mpz_t(), sorteador, p.get_mpz_t());
+        mpz_urandomm(z.b.get_mpz_t(), sorteador, p.get_mpz_t());
 
         Elemento g = power(z, expo, p);
 
@@ -192,7 +50,7 @@ Elemento acha_gerador(ll p, ll q) {
 ll gera_privada(ll q) {
     ll privada;
     ll limite = q - 1;
-    mpz_urandomm(privada.get_mpz_t(), gerador, limite.get_mpz_t());
+    mpz_urandomm(privada.get_mpz_t(), sorteador, limite.get_mpz_t());
     privada += 1; // [1, q)
     return privada;
 }
@@ -297,19 +155,22 @@ void elgamal() {
     cout << "\nMensagem original: (" << M.a << ", " << M.b << ")\n";
 
     auto [c1, c2] = elgamal_cifra(M, H, g, p, q);
+
+    cout << "\nMensagem encriptada: c1 = (" << c1.a << ", " << c1.b << "), c2 = (" << c2.a << ", " << c2.b << ")\n";
+
     Elemento M_dec = elgamal_decifra(c1, c2, d, p);
 
-    cout << "Mensagem decifrada: (" << M_dec.a << ", " << M_dec.b << ")\n";
+    cout << "\nMensagem decifrada: (" << M_dec.a << ", " << M_dec.b << ")\n";
 
     bool ok = (M.a == M_dec.a && M.b == M_dec.b);
-    cout << "Recuperada? " << (ok ? "SIM" : "NAO") << "\n";
+    cout << "\nRecuperada? " << (ok ? "SIM" : "NAO") << "\n";
 }
 
 
 int main() {
 
-    gmp_randinit_default(gerador); // instancia o gerador 'aleatorio'
-    gmp_randseed_ui(gerador, (unsigned long)time(nullptr));
+    gmp_randinit_default(sorteador); // instancia o sorteador
+    gmp_randseed_ui(sorteador, (unsigned long)time(nullptr));
 
     int operacao = 1;
     do {
