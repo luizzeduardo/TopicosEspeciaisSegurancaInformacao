@@ -17,9 +17,9 @@ gmp_randstate_t sorteador_chave;  // gerador do key schedule (semeado pela chave
 struct SubChave {
     Elemento k_theta;
     ll c;
+    ll c_inv;                  // c^-1 pre-computado
     vector<Elemento> rk;
 };
-
 
 Elemento rotacao(Elemento z, Elemento k_theta, ll p) {
     return mul(z, k_theta, p);
@@ -89,11 +89,11 @@ Elemento sbox(Elemento z, Elemento k_theta, ll c, Elemento delta, ll p) {
 }
 
 // Inversa: (y-delta)*alpha^-1 -> conj -> inverso -> desfaz k_theta,c
-Elemento sbox_inversa(Elemento y, Elemento k_theta, ll c, Elemento delta, ll p) {
+Elemento sbox_inversa(Elemento y, Elemento k_theta, ll c_inv, Elemento delta, ll p) {
     Elemento v = mul(sub(y, delta, p), ALPHA_INV, p);      // (y - delta)*alpha^-1
     Elemento u = conjugado(v, p);                          // conj desfaz conj
     Elemento t = inverso(u, p);                            // inversao desfaz inversao
-    Elemento z = dilatacao_inversa(t, c, p);               // * c^-1
+    Elemento z = dilatacao(t, c_inv, p);                   // usa o pre-computado
     return rotacao_inversa(z, k_theta, p);                 // * conj(k_theta)
 }
 
@@ -156,7 +156,7 @@ vector<Elemento> uma_rodada_inversa(vector<Elemento> bloco, const SubChave& sk, 
         bloco = difusao_tras_inversa(bloco, p);
     // desfaz a substituicao
     for (int i = 0; i < 4; i++) {
-        bloco[i] = sbox_inversa(bloco[i], sk.k_theta, sk.c, sk.rk[i], p);
+        bloco[i] = sbox_inversa(bloco[i], sk.k_theta, sk.c_inv, sk.rk[i], p);  
     }
     return bloco;
 }
@@ -172,8 +172,9 @@ Elemento gera_norma1(Elemento w, ll p) {
 
 
 vector<SubChave> key_schedule(ll chave, ll p) {
-    // semeia o gerador do key schedule com a chave (DETERMINISTICO)
+    // semeia o gerador do key schedule com a chave
     gmp_randseed(sorteador_chave, chave.get_mpz_t());
+
 
     vector<SubChave> chaves;
     for (int r = 0; r < NUM_RODADAS; r++) {
@@ -188,7 +189,8 @@ vector<SubChave> key_schedule(ll chave, ll p) {
         // c: constante != 0
         ll c;
         mpz_urandomm(c.get_mpz_t(), sorteador_chave, p.get_mpz_t());
-        if (c == 0) c = 1;   // garante c != 0
+        if (c == 0) c = 1;
+        ll c_inv = inv_mod_int(c, p);
 
         // rk: delta aditivo da S-box, um elemento por lane
         vector<Elemento> rk(4);
@@ -197,7 +199,7 @@ vector<SubChave> key_schedule(ll chave, ll p) {
             mpz_urandomm(rk[i].b.get_mpz_t(), sorteador_chave, p.get_mpz_t());
         }
 
-        chaves.push_back({k_theta, c, rk});
+        chaves.push_back({k_theta, c, c_inv, rk});
     }
     return chaves;
 }
@@ -348,6 +350,27 @@ int homogeneidade(ll p, int tentativas) {
 }
 
 
+// medição do "ANTES" da otimizacao: decifra recomputando c^-1 por elemento
+Elemento sbox_inv_antigo(Elemento y, Elemento k_theta, ll c, Elemento delta, ll p) {
+    Elemento v = mul(sub(y, delta, p), ALPHA_INV, p);
+    Elemento u = conjugado(v, p);
+    Elemento t = inverso(u, p);
+    Elemento z = dilatacao_inversa(t, c, p);   // recalcula inv_mod_int(c,p) toda vez
+    return rotacao_inversa(z, k_theta, p);
+}
+
+
+vector<Elemento> decifra_antiga(vector<Elemento> b, vector<SubChave> ks, ll p) {
+    for (int r = NUM_RODADAS - 1; r >= 0; r--) {
+        if (r % 2 == 0) b = difusao_frente_inversa(b, p);
+        else            b = difusao_tras_inversa(b, p);
+        for (int i = 0; i < 4; i++)
+            b[i] = sbox_inv_antigo(b[i], ks[r].k_theta, ks[r].c, ks[r].rk[i], p);
+    }
+    return b;
+}
+
+
 
 // =============================================
 //            Funções dos testes
@@ -472,6 +495,36 @@ void teste_homogeneidade(ll p, int tentativas) {
          << " tentativas: " << ocorr << "\n";
 }
 
+void teste_otimizacao(ll p) {
+    size_t nbits = mpz_sizeinbase(p.get_mpz_t(), 2);
+    ll chave = gerar_chave_aleatoria(nbits);
+    auto chaves = key_schedule(chave, p);
+    vector<Elemento> M(4);
+    for (auto& e : M) {
+        mpz_urandomm(e.a.get_mpz_t(), sorteador, p.get_mpz_t());
+        mpz_urandomm(e.b.get_mpz_t(), sorteador, p.get_mpz_t());
+    }
+    auto C = cifrar(M, chaves, p);
+
+    int N = nbits <= 128 ? 3000 : (nbits <= 256 ? 1000 : 300);
+    cout << "\n--- Otimizacao c^-1 (antes/depois, " << nbits << " bits) ---\n";
+
+    auto t0 = chrono::high_resolution_clock::now();
+    for (int i = 0; i < N; i++) { volatile auto x = cifrar(M, chaves, p); (void)x; }
+    auto t1 = chrono::high_resolution_clock::now();
+    for (int i = 0; i < N; i++) { volatile auto x = decifra_antiga(C, chaves, p); (void)x; }  // ANTES
+    auto t2 = chrono::high_resolution_clock::now();
+    for (int i = 0; i < N; i++) { volatile auto x = decifrar(C, chaves, p); (void)x; }         // DEPOIS
+    auto t3 = chrono::high_resolution_clock::now();
+
+    double cif = chrono::duration_cast<chrono::nanoseconds>(t1 - t0).count() / 1000.0 / N;
+    double antes = chrono::duration_cast<chrono::nanoseconds>(t2 - t1).count() / 1000.0 / N;
+    double depois = chrono::duration_cast<chrono::nanoseconds>(t3 - t2).count() / 1000.0 / N;
+    cout << fixed << setprecision(2);
+    cout << "Cifracao          : " << cif << " us/bloco\n";
+    cout << "Decifracao ANTES  : " << antes << " us/bloco\n";
+    cout << "Decifracao DEPOIS : " << depois << " us/bloco\n";
+}
 
 int main() {
     gmp_randinit_default(sorteador);
@@ -498,6 +551,8 @@ int main() {
 
     // teste de homogeneidade
     teste_homogeneidade(p, 100);
+
+    teste_otimizacao(p);
 
     return 0;
 }
