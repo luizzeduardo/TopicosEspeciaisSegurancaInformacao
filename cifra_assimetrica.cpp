@@ -82,7 +82,7 @@ pair<Elemento, Elemento> elgamal_cifra(Elemento M, Elemento H, Elemento g, ll p,
 Elemento elgamal_decifra(Elemento c1, Elemento c2, ll d, ll p) {
     Elemento mascara = power(c1, d, p);
     Elemento inversa = inv_mod(mascara, p);
-    Elemento m =mul(c2, inversa, p);
+    Elemento m = mul(c2, inversa, p);
     return m;
 }
 
@@ -180,7 +180,7 @@ int main() {
         cout << "Escolha:\n";
         cout << "0: Sair\n";
         cout << "1: Diffie Helman\n";
-        cout << "2: ElGammal\n";
+        cout << "2: ElGamal\n";
         cin >> operacao;
     
         if (operacao == 1) {
